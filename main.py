@@ -78,7 +78,7 @@ GITHUB_CONFIG = {
     "owner": "zzzzoeaa-tech",
     "repo": "onyx-databases",
     "branch": "main",
-    "token": "github_pk_xxxxxxxxxxxxx"  # <-- GANTI DENGAN TOKEN ASLI
+    "token": "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"  # <-- GANTI DENGAN TOKEN ASLI
 }
 
 # Telegram API
