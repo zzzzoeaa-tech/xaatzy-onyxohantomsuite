@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
 TELEGRAM MASS REPORTER TOOL - SHARED SESSIONS VERSION
-Onyxphantom Suite - Coded By Xaatzy - Version 7.0.0
-Fitur: Semua user bisa pakai session Telegram yang sama (shared sessions)
+Onyxphantom Suite - Coded By Xaatzy - Version 8.0.0
+Fitur: 
+- SEMUA USER bisa add shared sessions (bisa dipakai bersama)
+- Device terblokir langsung exit, tidak bisa pakai tools lagi
+- Tidak ada pesan default owner saat login gagal
 GitHub: https://github.com/zzzzoeaa-tech/telegram-reporter
 Contact: @craazin | t.me/craazin
 """
@@ -73,27 +76,27 @@ except ImportError:
     import requests
 
 # ==================== KONFIGURASI ====================
-# !!! GANTI DENGAN DATA GITHUB KAMU !!!
 GITHUB_CONFIG = {
     "owner": "zzzzoeaa-tech",
     "repo": "onyx-databases",
     "branch": "main",
-    "token": "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"  # <-- GANTI DENGAN TOKEN ASLI
+    "token": "github_h2KoRDY2SdqEgrm7V61n3aL10l71El1WFsx3"
 }
 
 # Telegram API
 API_ID = 25683949
 API_HASH = "5a0f1b821252088fe36c523c01c82533"
 
-# Bot Telegram untuk notifikasi
+# Bot Telegram untuk notifikasi (opsional)
 BOT_TOKEN = "8677431229:AAF7MxKXHesv0cSXfOU0K0Aw9tJCl65xNq8"
 OWNER_CHAT_ID = "1394010666"
 
-# Default Owner
-DEFAULT_OWNER = {
-    "username": "owner",
-    "password": "admin123"
-}
+# Default Owner (HANYA UNTUK FIRST SETUP, TIDAK AKAN DITAMPILKAN SAAT LOGIN GAGAL)
+DEFAULT_OWNER_USERNAME = "owner"
+DEFAULT_OWNER_PASSWORD = "admin123"
+
+# File untuk menandai device terblokir (biar tidak bisa install ulang)
+BLOCKED_FLAG_FILE = ".device_blocked"
 
 # ==================== WARNA ====================
 class Colors:
@@ -129,6 +132,42 @@ ASCII_ART = f"""
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
 """
 
+# ==================== DEVICE BLOCK CHECK (EKSTREME) ====================
+def is_device_permanently_blocked() -> bool:
+    """Cek apakah device sudah diblokir permanen"""
+    return os.path.exists(BLOCKED_FLAG_FILE)
+
+def mark_device_permanently_blocked():
+    """Tandai device sebagai terblokir permanen"""
+    with open(BLOCKED_FLAG_FILE, "w") as f:
+        f.write(f"Blocked at: {datetime.now().isoformat()}\n")
+        f.write(f"Device ID: {get_device_id()}\n")
+        f.write("This device is permanently blocked from using this tool.\n")
+
+def block_device_and_exit():
+    """Blokir device dan exit program (tidak bisa melakukan apapun)"""
+    mark_device_permanently_blocked()
+    os.system("clear" if os.name == "posix" else "cls")
+    print(f"""
+{Colors.RED}{'═' * 60}{Colors.RESET}
+{Colors.RED}🔒 DEVICE HAS BEEN PERMANENTLY BLOCKED 🔒{Colors.RESET}
+{Colors.RED}{'═' * 60}{Colors.RESET}
+
+{Colors.YELLOW}This device has been blocked due to:
+- Multiple failed login attempts
+- Security violation
+
+{Colors.RED}YOU CANNOT:
+- Login to this tool again
+- Reinstall or re-run this program
+- Bypass this block
+
+{Colors.DIM}Contact owner: @craazin{Colors.RESET}
+
+{Colors.RED}{'═' * 60}{Colors.RESET}
+    """)
+    sys.exit(1)
+
 # ==================== GITHUB DATABASE ====================
 class GitHubDatabase:
     def __init__(self):
@@ -156,8 +195,7 @@ class GitHubDatabase:
                     content = base64.b64decode(data["content"]).decode("utf-8")
                     return json.loads(content)
                 return None
-        except Exception as e:
-            print(f"{Colors.RED}[!] Read error: {e}{Colors.RESET}")
+        except Exception:
             return None
     
     async def write_file(self, path: str, data: dict, msg: str = "Update") -> bool:
@@ -165,7 +203,6 @@ class GitHubDatabase:
             url = f"{self.base_url}/{path}"
             content = base64.b64encode(json.dumps(data, indent=2).encode()).decode()
             
-            # Get existing file SHA
             existing_sha = None
             session = await self._get_session()
             async with session.get(url, headers=self.headers) as resp:
@@ -183,8 +220,7 @@ class GitHubDatabase:
             
             async with session.put(url, headers=self.headers, json=payload) as resp:
                 return resp.status in [200, 201]
-        except Exception as e:
-            print(f"{Colors.RED}[!] Write error: {e}{Colors.RESET}")
+        except Exception:
             return False
     
     async def close(self):
@@ -193,28 +229,21 @@ class GitHubDatabase:
 
 # ==================== SHARED SESSION MANAGER ====================
 class SharedSessionManager:
-    """Semua user pakai session yang sama (shared)"""
-    
     def __init__(self, db: GitHubDatabase):
         self.db = db
-        self.sessions = []  # Shared sessions untuk semua user
-        self.local_dir = "shared_sessions"  # Folder lokal untuk session
+        self.sessions = []
+        self.local_dir = "shared_sessions"
         self.stats = {"total": 0, "success": 0, "failed": 0}
     
     async def load(self):
-        """Load shared sessions dari GitHub"""
-        # Buat folder lokal
         if not os.path.exists(self.local_dir):
             os.makedirs(self.local_dir)
         
-        # Load sessions dari GitHub
         sessions_data = await self.db.read_file("data/shared_sessions.json")
         if sessions_data:
             self.sessions = sessions_data.get("sessions", [])
             self.stats = sessions_data.get("stats", {"total": 0, "success": 0, "failed": 0})
-            print(f"{Colors.GREEN}[✓] Loaded {len(self.sessions)} shared sessions{Colors.RESET}")
         
-        # Download session files yang belum ada
         for s in self.sessions:
             local_file = os.path.join(self.local_dir, s["file"])
             if not os.path.exists(local_file):
@@ -222,43 +251,34 @@ class SharedSessionManager:
                 if session_data and "content" in session_data:
                     with open(local_file, "wb") as f:
                         f.write(base64.b64decode(session_data["content"]))
-                    print(f"{Colors.GREEN}[✓] Downloaded session: {s['phone']}{Colors.RESET}")
         
         return len(self.sessions)
     
     async def save(self):
-        """Save shared sessions ke GitHub"""
         sessions_data = {
             "sessions": self.sessions,
             "stats": self.stats,
             "last_updated": datetime.now().isoformat()
         }
-        success = await self.db.write_file("data/shared_sessions.json", sessions_data, "Update shared sessions")
-        if success:
-            print(f"{Colors.GREEN}[✓] Saved {len(self.sessions)} shared sessions{Colors.RESET}")
-        return success
+        return await self.db.write_file("data/shared_sessions.json", sessions_data, "Update shared sessions")
     
-    async def add_session(self, phone: str, user_id: int, name: str, session_data: bytes):
-        """Add new shared session"""
+    async def add_session(self, phone: str, user_id: int, name: str, current_user: str, session_data: bytes):
         session_file = f"{user_id}.session"
         local_path = os.path.join(self.local_dir, session_file)
         
-        # Save locally
         with open(local_path, "wb") as f:
             f.write(session_data)
         
-        # Upload to GitHub (shared folder)
         await self.db.write_file(f"sessions/shared/{session_file}", 
                                 {"content": base64.b64encode(session_data).decode()}, 
-                                f"Add shared session: {phone}")
+                                f"Add session: {phone}")
         
-        # Add to sessions list
         self.sessions.append({
             "id": user_id,
             "phone": phone,
             "file": session_file,
             "name": name,
-            "added_by": "owner",
+            "added_by": current_user,
             "added_at": datetime.now().isoformat(),
             "last_used": datetime.now().isoformat()
         })
@@ -267,20 +287,23 @@ class SharedSessionManager:
         print(f"{Colors.GREEN}[✓] Shared session added: {phone}{Colors.RESET}")
         return True
     
-    async def remove_session(self, index: int):
-        """Remove shared session"""
+    async def remove_session(self, index: int, current_user: str, is_owner: bool = False):
         if 0 <= index < len(self.sessions):
-            session = self.sessions.pop(index)
-            local_path = os.path.join(self.local_dir, session["file"])
-            if os.path.exists(local_path):
-                os.remove(local_path)
-            await self.save()
-            print(f"{Colors.GREEN}[✓] Shared session removed: {session['phone']}{Colors.RESET}")
-            return True
+            session = self.sessions[index]
+            if is_owner or session.get("added_by") == current_user:
+                self.sessions.pop(index)
+                local_path = os.path.join(self.local_dir, session["file"])
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+                await self.save()
+                print(f"{Colors.GREEN}[✓] Session removed: {session['phone']}{Colors.RESET}")
+                return True
+            else:
+                print(f"{Colors.RED}[!] You can only remove sessions you added!{Colors.RESET}")
+                return False
         return False
     
     async def get_clients(self):
-        """Get all active Telegram clients from shared sessions"""
         clients = []
         for s in self.sessions:
             try:
@@ -290,52 +313,17 @@ class SharedSessionManager:
                     await client.connect()
                     if await client.is_user_authorized():
                         clients.append((s["id"], client, s))
-                        print(f"{Colors.GREEN}[✓] Connected: {s['phone']}{Colors.RESET}")
                     else:
                         await client.disconnect()
-                        print(f"{Colors.YELLOW}[!] Not authorized: {s['phone']}{Colors.RESET}")
-            except Exception as e:
-                print(f"{Colors.RED}[!] Connect failed: {s.get('phone', '?')} - {e}{Colors.RESET}")
+            except Exception:
+                pass
         return clients
     
     async def update_stats(self, total_success: int, total_failed: int):
-        """Update global stats"""
         self.stats["total"] += total_success + total_failed
         self.stats["success"] += total_success
         self.stats["failed"] += total_failed
         await self.save()
-
-# ==================== BOT NOTIFIER ====================
-class BotNotifier:
-    def __init__(self):
-        self.api_url = f"https://api.telegram.org/bot{BOT_TOKEN}"
-    
-    def get_public_ip(self):
-        try:
-            return requests.get('https://api.ipify.org', timeout=5).text
-        except:
-            return "Unknown"
-    
-    def send_notification(self, device_id: str, username: str, reason: str, block_type: str = "temporary"):
-        public_ip = self.get_public_ip()
-        hostname = platform.node()
-        
-        message = f"""
-🚫 DEVICE BLOCKED NOTIFICATION
-
-Device ID: {device_id[:16]}...
-Username: {username}
-Hostname: {hostname}
-Public IP: {public_ip}
-Reason: {reason}
-Block Type: {block_type.upper()}
-Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
-        try:
-            requests.post(f"{self.api_url}/sendMessage", 
-                         json={"chat_id": OWNER_CHAT_ID, "text": message}, timeout=5)
-        except:
-            pass
 
 # ==================== USER MANAGER ====================
 class UserManager:
@@ -349,10 +337,10 @@ class UserManager:
         data = await self.db.read_file("data/users.json")
         if not data:
             data = {
-                "owner": DEFAULT_OWNER["username"],
+                "owner": DEFAULT_OWNER_USERNAME,
                 "users": {
-                    DEFAULT_OWNER["username"]: {
-                        "password": self.hash_password(DEFAULT_OWNER["password"]),
+                    DEFAULT_OWNER_USERNAME: {
+                        "password": self.hash_password(DEFAULT_OWNER_PASSWORD),
                         "created_at": datetime.now().isoformat(),
                         "role": "owner",
                         "banned": False,
@@ -361,22 +349,21 @@ class UserManager:
                 }
             }
             await self.db.write_file("data/users.json", data, "Init users")
-            print(f"\n{Colors.GREEN}[✓] Default owner created: owner / admin123{Colors.RESET}")
         return data
     
     async def verify_user(self, username: str, password: str, device_id: str) -> Tuple[bool, dict]:
         data = await self.get_users()
         if username not in data["users"]:
-            return False, {"error": "User not found"}
+            return False, {"error": "Login Failed!"}
         
         user = data["users"][username]
         if user["password"] != self.hash_password(password):
-            return False, {"error": "Wrong password"}
+            return False, {"error": "Login Failed!"}
         if user.get("banned", False):
-            return False, {"error": "User is banned"}
+            return False, {"error": "Login Failed!"}
         if user.get("role") != "owner" and user.get("expiry"):
             if datetime.now() > datetime.fromisoformat(user["expiry"]):
-                return False, {"error": "License expired"}
+                return False, {"error": "Login Failed!"}
         
         user["last_login"] = datetime.now().isoformat()
         user["last_device"] = device_id
@@ -448,7 +435,6 @@ class UserManager:
 class DeviceManager:
     def __init__(self, db: GitHubDatabase):
         self.db = db
-        self.bot = BotNotifier()
     
     async def get_devices(self) -> dict:
         data = await self.db.read_file("data/devices.json")
@@ -473,11 +459,15 @@ class DeviceManager:
         return await self.db.write_file("data/devices.json", data, "Register device")
     
     async def is_blocked(self, device_id: str) -> Tuple[bool, str]:
+        # Cek local flag dulu
+        if is_device_permanently_blocked():
+            return True, "PERMANENT_BLOCK"
+        
         data = await self.get_devices()
         if device_id in data.get("blocked_devices", []):
-            return True, "Device permanently blocked"
+            return True, "PERMANENT_BLOCK"
         if device_id in data["devices"] and data["devices"][device_id].get("blocked"):
-            return True, "Device blocked by owner"
+            return True, "PERMANENT_BLOCK"
         return False, ""
     
     async def record_failed(self, device_id: str, username: str = None) -> Tuple[bool, str]:
@@ -500,11 +490,12 @@ class DeviceManager:
             if device_id not in data["blocked_devices"]:
                 data["blocked_devices"].append(device_id)
             await self.db.write_file("data/devices.json", data, "Block device")
-            self.bot.send_notification(device_id, username or "unknown", "3 failed attempts", "temporary")
-            return True, "Device blocked after 3 failed attempts"
+            # Block device permanently
+            block_device_and_exit()
+            return True, "PERMANENT_BLOCK"
         
         await self.db.write_file("data/devices.json", data, "Failed attempt")
-        return False, f"{3 - device['failed_attempts']} attempts left"
+        return False, f"{3 - device['failed_attempts']}"
     
     async def reset_attempts(self, device_id: str) -> bool:
         data = await self.get_devices()
@@ -537,7 +528,7 @@ class TelegramReporter:
         except:
             return False
     
-    async def report_channel(self, target: str, count: int = 1, username: str = None):
+    async def report_channel(self, target: str, count: int = 1):
         target_username = self.extract_username(target)
         if not target_username:
             print(f"{Colors.RED}[!] Invalid target{Colors.RESET}")
@@ -546,10 +537,9 @@ class TelegramReporter:
         clients = await self.sm.get_clients()
         if not clients:
             print(f"{Colors.RED}[!] No active shared sessions!{Colors.RESET}")
-            print(f"{Colors.YELLOW}[!] Ask owner to add Telegram sessions first{Colors.RESET}")
+            print(f"{Colors.YELLOW}[!] Please add Telegram session first (Menu 1){Colors.RESET}")
             return False
         
-        total = 0
         success_count = 0
         failed_count = 0
         
@@ -558,7 +548,6 @@ class TelegramReporter:
         
         for uid, client, session in clients:
             try:
-                # Try to join if not already joined
                 try:
                     entity = await client.get_entity(target_username)
                 except:
@@ -568,38 +557,33 @@ class TelegramReporter:
                 for i in range(count):
                     try:
                         await client(ReportSpamRequest(peer=entity))
-                        total += 1
                         success_count += 1
                         print(f"{Colors.CYAN}⣾ [{session['phone']}] Report {i+1}/{count}{Colors.RESET}", end="\r")
                     except FloodWaitError as e:
                         print(f"\n{Colors.YELLOW}[!] Flood wait {e.seconds}s - {session['phone']}{Colors.RESET}")
                         await asyncio.sleep(e.seconds)
-                    except Exception as e:
-                        print(f"\n{Colors.RED}[!] Failed: {e} - {session['phone']}{Colors.RESET}")
+                    except Exception:
                         failed_count += 1
                     await asyncio.sleep(self.settings["delay"])
                 await client.disconnect()
-            except Exception as e:
-                print(f"{Colors.RED}[!] Error with {session['phone']}: {e}{Colors.RESET}")
+            except Exception:
                 failed_count += count
         
         print()
         await self.sm.update_stats(success_count, failed_count)
-        print(f"{Colors.GREEN}[✓] Report complete! Total: {success_count} success, {failed_count} failed{Colors.RESET}")
-        return total > 0
+        print(f"{Colors.GREEN}[✓] Report complete! Success: {success_count}, Failed: {failed_count}{Colors.RESET}")
+        return success_count > 0
     
-    async def login_telegram(self):
-        """Add new shared session (only owner can do this)"""
+    async def add_shared_session(self, current_user: str):
         print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-        print(f"{Colors.BOLD}{Colors.YELLOW}▢ ADD SHARED SESSION{Colors.RESET}")
+        print(f"{Colors.BOLD}{Colors.YELLOW}▢ ADD SHARED SESSION (Telegram Account){Colors.RESET}")
         print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-        print(f"{Colors.DIM}This session will be available for ALL users{Colors.RESET}\n")
+        print(f"{Colors.DIM}This session will be available for ALL users!{Colors.RESET}\n")
         
         phone = input(f"{Colors.GREEN}Phone (+62xxx): {Colors.RESET}").strip()
         if not phone.startswith("+"):
             phone = "+" + phone
         
-        # Check if session already exists
         for s in self.sm.sessions:
             if s.get("phone") == phone:
                 print(f"{Colors.YELLOW}[!] Session already exists!{Colors.RESET}")
@@ -626,11 +610,11 @@ class TelegramReporter:
             with open(session_file, "rb") as f:
                 content = f.read()
             
-            await self.sm.add_session(phone, me.id, me.first_name or "", content)
+            await self.sm.add_session(phone, me.id, me.first_name or "", current_user, content)
             os.remove(session_file)
-            print(f"{Colors.GREEN}[✓] Shared session added!{Colors.RESET}")
+            
+            print(f"\n{Colors.GREEN}[✓] Shared session added successfully!{Colors.RESET}")
             print(f"{Colors.CYAN}▢ Name: {me.first_name}{Colors.RESET}")
-            print(f"{Colors.CYAN}▢ ID: {me.id}{Colors.RESET}")
             print(f"{Colors.GREEN}[✓] Now ALL users can use this session to report!{Colors.RESET}")
         except Exception as e:
             print(f"{Colors.RED}[!] Failed: {e}{Colors.RESET}")
@@ -660,12 +644,8 @@ class OwnerPanel:
 {Colors.GREEN}[3]{Colors.RESET} Ban/Unban User
 {Colors.GREEN}[4]{Colors.RESET} Extend License
 {Colors.GREEN}[5]{Colors.RESET} List Users
-{Colors.GREEN}[6]{Colors.RESET} Block Device
-{Colors.GREEN}[7]{Colors.RESET} Unblock Device
-{Colors.GREEN}[8]{Colors.RESET} List Devices
-{Colors.GREEN}[9]{Colors.RESET} List Shared Sessions
-{Colors.GREEN}[A]{Colors.RESET} Add Shared Session (Telegram)
-{Colors.GREEN}[R]{Colors.RESET} Remove Shared Session
+{Colors.GREEN}[6]{Colors.RESET} List Devices
+{Colors.GREEN}[7]{Colors.RESET} List Shared Sessions
 {Colors.GREEN}[0]{Colors.RESET} Back
 
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
@@ -715,58 +695,9 @@ class OwnerPanel:
                     expiry = u.get('expiry', 'Never')[:10] if u.get('expiry') else 'Never'
                     print(f"{Colors.GREEN}{u['username']}{Colors.RESET}: {status} {role}")
                     print(f"  Expiry: {expiry}")
-                    print(f"  Reports: {u.get('stats', {}).get('total', 0)}")
                     print()
                 input("Press Enter...")
             elif choice == "6":
-                devices = await self.dm.get_devices()
-                print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-                print(f"{Colors.BOLD}DEVICES LIST{Colors.RESET}")
-                print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-                devices_list = list(devices["devices"].items())
-                for i, (did, info) in enumerate(devices_list, 1):
-                    status = f"{Colors.RED}BLOCKED{Colors.RESET}" if info.get("blocked") else f"{Colors.GREEN}ACTIVE{Colors.RESET}"
-                    print(f"{i}. {status} - {info['name']}")
-                    print(f"   ID: {did[:16]}...")
-                    print(f"   Owner: {info['owner']}")
-                try:
-                    idx = int(input("\nSelect device: ")) - 1
-                    if 0 <= idx < len(devices_list):
-                        did = devices_list[idx][0]
-                        devices["devices"][did]["blocked"] = True
-                        if did not in devices["blocked_devices"]:
-                            devices["blocked_devices"].append(did)
-                        await self.dm.db.write_file("data/devices.json", devices, "Block device")
-                        print(f"{Colors.GREEN}[✓] Device blocked{Colors.RESET}")
-                except:
-                    pass
-                input("Press Enter...")
-            elif choice == "7":
-                devices = await self.dm.get_devices()
-                blocked = devices["blocked_devices"]
-                if not blocked:
-                    print(f"{Colors.YELLOW}[!] No blocked devices{Colors.RESET}")
-                    input("Press Enter...")
-                    continue
-                print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-                print(f"{Colors.BOLD}BLOCKED DEVICES{Colors.RESET}")
-                print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-                for i, did in enumerate(blocked, 1):
-                    info = devices["devices"].get(did, {})
-                    print(f"{i}. {info.get('name', 'Unknown')} - {did[:16]}...")
-                try:
-                    idx = int(input("\nSelect device: ")) - 1
-                    if 0 <= idx < len(blocked):
-                        did = blocked[idx]
-                        devices["blocked_devices"].remove(did)
-                        if did in devices["devices"]:
-                            devices["devices"][did]["blocked"] = False
-                        await self.dm.db.write_file("data/devices.json", devices, "Unblock device")
-                        print(f"{Colors.GREEN}[✓] Device unblocked{Colors.RESET}")
-                except:
-                    pass
-                input("Press Enter...")
-            elif choice == "8":
                 devices = await self.dm.get_devices()
                 print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
                 print(f"{Colors.BOLD}ALL DEVICES{Colors.RESET}")
@@ -774,12 +705,11 @@ class OwnerPanel:
                 for did, info in devices["devices"].items():
                     status = f"{Colors.RED}BLOCKED{Colors.RESET}" if info.get("blocked") else f"{Colors.GREEN}ACTIVE{Colors.RESET}"
                     print(f"{Colors.CYAN}Device:{Colors.RESET} {info['name']} [{status}]")
-                    print(f"  ID: {did}")
                     print(f"  Owner: {info['owner']}")
                     print(f"  Failed: {info.get('failed_attempts', 0)}")
                     print()
                 input("Press Enter...")
-            elif choice == "9":
+            elif choice == "7":
                 print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
                 print(f"{Colors.BOLD}SHARED SESSIONS{Colors.RESET}")
                 print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}\n")
@@ -788,30 +718,9 @@ class OwnerPanel:
                 else:
                     for i, s in enumerate(self.sm.sessions, 1):
                         print(f"{Colors.GREEN}{i}.{Colors.RESET} {s.get('phone', '?')} | {s.get('name', '?')}")
+                        print(f"   Added by: {s.get('added_by', 'unknown')}")
                         print(f"   Added: {s.get('added_at', '?')[:16]}")
-                        print(f"   Used by: ALL USERS")
                         print()
-                input("Press Enter...")
-            elif choice == "a":
-                # Add shared session - panggil fungsi dari reporter
-                reporter = TelegramReporter(self.sm)
-                await reporter.login_telegram()
-            elif choice == "r":
-                if not self.sm.sessions:
-                    print(f"{Colors.YELLOW}[!] No shared sessions{Colors.RESET}")
-                    input("Press Enter...")
-                    continue
-                print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
-                print(f"{Colors.BOLD}REMOVE SHARED SESSION{Colors.RESET}")
-                print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}\n")
-                for i, s in enumerate(self.sm.sessions, 1):
-                    print(f"{Colors.GREEN}{i}.{Colors.RESET} {s.get('phone', '?')} | {s.get('name', '?')}")
-                try:
-                    idx = int(input(f"\n{Colors.GREEN}Select (0=cancel): {Colors.RESET}")) - 1
-                    if idx >= 0:
-                        await self.sm.remove_session(idx)
-                except:
-                    pass
                 input("Press Enter...")
             elif choice == "0":
                 break
@@ -825,23 +734,18 @@ class MainMenu:
         self.db = GitHubDatabase()
         self.um = UserManager(self.db)
         self.dm = DeviceManager(self.db)
-        self.sm = SharedSessionManager(self.db)  # Shared sessions untuk semua user
+        self.sm = SharedSessionManager(self.db)
         self.reporter = None
     
     async def run(self):
-        print(f"{Colors.CYAN}[*] Registering device...{Colors.RESET}")
         await self.dm.register_device(self.username, self.device_id)
-        
-        print(f"{Colors.CYAN}[*] Loading shared sessions from GitHub...{Colors.RESET}")
         await self.sm.load()
-        
         self.reporter = TelegramReporter(self.sm)
         
         while True:
             os.system("clear" if os.name == "posix" else "cls")
             print(ASCII_ART)
             
-            # Get current time
             now = datetime.now()
             time_str = now.strftime("%H:%M:%S")
             date_str = now.strftime("%A, %d %B %Y")
@@ -864,46 +768,52 @@ class MainMenu:
 {Colors.BOLD}{Colors.YELLOW}▢ MAIN MENU{Colors.RESET}
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
 
-{Colors.GREEN}[1]{Colors.RESET} ▢ Report Channel/Group
-{Colors.GREEN}[2]{Colors.RESET} ▢ Report Post
-{Colors.GREEN}[3]{Colors.RESET} ▢ Report Account
-{Colors.GREEN}[4]{Colors.RESET} ▢ Report Bot
-{Colors.GREEN}[5]{Colors.RESET} ▢ Statistics
+{Colors.GREEN}[1]{Colors.RESET} ▢ Add Shared Session (Telegram)
+{Colors.GREEN}[2]{Colors.RESET} ▢ Report Channel/Group
+{Colors.GREEN}[3]{Colors.RESET} ▢ Report Post
+{Colors.GREEN}[4]{Colors.RESET} ▢ Report Account
+{Colors.GREEN}[5]{Colors.RESET} ▢ Report Bot
+{Colors.GREEN}[6]{Colors.RESET} ▢ Statistics
+{Colors.GREEN}[7]{Colors.RESET} ▢ List Shared Sessions
+{Colors.GREEN}[8]{Colors.RESET} ▢ Remove My Session
+{Colors.GREEN}[9]{Colors.RESET} ▢ Settings
 {owner_menu}
 {Colors.GREEN}[0]{Colors.RESET} ▢ Logout
 
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
-{Colors.DIM}User: {self.username} ({self.role}) | Shared Sessions: {len(self.sm.sessions)} | Total Reports: {self.sm.stats['total']} | Rate: {rate:.0f}%{Colors.RESET}
+{Colors.DIM}User: {self.username} ({self.role}) | Sessions: {len(self.sm.sessions)} | Total Reports: {self.sm.stats['total']} | Rate: {rate:.0f}%{Colors.RESET}
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
             """)
             
             choice = input(f"{Colors.GREEN}Choice: {Colors.RESET}").lower()
             
             if choice == "1":
+                await self.reporter.add_shared_session(self.username)
+            elif choice == "2":
                 target = input(f"{Colors.GREEN}Target (@username or link): {Colors.RESET}")
                 cnt = int(input(f"{Colors.GREEN}Count per session (1-100): {Colors.RESET}") or "1")
-                await self.reporter.report_channel(target, min(cnt, 100), self.username)
+                await self.reporter.report_channel(target, min(cnt, 100))
                 input("Press Enter...")
-            elif choice == "2":
+            elif choice == "3":
                 target = input(f"{Colors.GREEN}Post link: {Colors.RESET}")
                 cnt = int(input(f"{Colors.GREEN}Count per session (1-100): {Colors.RESET}") or "1")
                 channel = re.search(r"t\.me/([a-zA-Z0-9_]+)", target)
                 if channel:
-                    await self.reporter.report_channel(channel.group(1), min(cnt, 100), self.username)
+                    await self.reporter.report_channel(channel.group(1), min(cnt, 100))
                 else:
                     print(f"{Colors.RED}[!] Invalid link{Colors.RESET}")
                 input("Press Enter...")
-            elif choice == "3":
+            elif choice == "4":
                 target = input(f"{Colors.GREEN}Username: {Colors.RESET}")
                 cnt = int(input(f"{Colors.GREEN}Count per session (1-100): {Colors.RESET}") or "1")
-                await self.reporter.report_channel(target, min(cnt, 100), self.username)
-                input("Press Enter...")
-            elif choice == "4":
-                target = input(f"{Colors.GREEN}Bot username: {Colors.RESET}")
-                cnt = int(input(f"{Colors.GREEN}Count per session (1-100): {Colors.RESET}") or "1")
-                await self.reporter.report_channel(target, min(cnt, 100), self.username)
+                await self.reporter.report_channel(target, min(cnt, 100))
                 input("Press Enter...")
             elif choice == "5":
+                target = input(f"{Colors.GREEN}Bot username: {Colors.RESET}")
+                cnt = int(input(f"{Colors.GREEN}Count per session (1-100): {Colors.RESET}") or "1")
+                await self.reporter.report_channel(target, min(cnt, 100))
+                input("Press Enter...")
+            elif choice == "6":
                 print(f"""
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
 {Colors.BOLD}{Colors.YELLOW}▢ STATISTICS{Colors.RESET}
@@ -917,6 +827,45 @@ class MainMenu:
 {Colors.CYAN}{'═' * 60}{Colors.RESET}
                 """)
                 input("Press Enter...")
+            elif choice == "7":
+                print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
+                print(f"{Colors.BOLD}SHARED SESSIONS{Colors.RESET}")
+                print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}\n")
+                if not self.sm.sessions:
+                    print(f"{Colors.YELLOW}No shared sessions{Colors.RESET}")
+                else:
+                    for i, s in enumerate(self.sm.sessions, 1):
+                        print(f"{Colors.GREEN}{i}.{Colors.RESET} {s.get('phone', '?')} | {s.get('name', '?')}")
+                        print(f"   Added by: {s.get('added_by', 'unknown')}")
+                        print()
+                input("Press Enter...")
+            elif choice == "8":
+                if not self.sm.sessions:
+                    print(f"{Colors.YELLOW}No sessions{Colors.RESET}")
+                    input("Press Enter...")
+                    continue
+                print(f"\n{Colors.CYAN}{'═' * 60}{Colors.RESET}")
+                print(f"{Colors.BOLD}REMOVE MY SESSION{Colors.RESET}")
+                print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}\n")
+                my_sessions = [(i, s) for i, s in enumerate(self.sm.sessions) if s.get("added_by") == self.username]
+                if not my_sessions:
+                    print(f"{Colors.YELLOW}You have no sessions added{Colors.RESET}")
+                    input("Press Enter...")
+                    continue
+                for i, (idx, s) in enumerate(my_sessions, 1):
+                    print(f"{Colors.GREEN}{i}.{Colors.RESET} {s.get('phone', '?')} | {s.get('name', '?')}")
+                try:
+                    choice_idx = int(input(f"\n{Colors.GREEN}Select (0=cancel): {Colors.RESET}")) - 1
+                    if choice_idx >= 0 and choice_idx < len(my_sessions):
+                        await self.sm.remove_session(my_sessions[choice_idx][0], self.username, self.role == "owner")
+                except:
+                    pass
+                input("Press Enter...")
+            elif choice == "9":
+                new_delay = int(input(f"Delay ({self.reporter.settings['delay']}s): ") or "3")
+                self.reporter.settings["delay"] = max(1, min(10, new_delay))
+                print(f"{Colors.GREEN}[✓] Delay set to {self.reporter.settings['delay']}s{Colors.RESET}")
+                input("Press Enter...")
             elif choice == "a" and self.role == "owner":
                 owner = OwnerPanel(self.um, self.dm, self.sm, self.username)
                 await owner.show()
@@ -925,7 +874,7 @@ class MainMenu:
                 await self.db.close()
                 break
 
-# ==================== LOGIN ====================
+# ==================== GET DEVICE ID ====================
 def get_device_id() -> str:
     system = platform.system()
     if system == "Linux":
@@ -934,11 +883,21 @@ def get_device_id() -> str:
                 return hashlib.sha256(f.read().strip().encode()).hexdigest()[:32]
         except:
             pass
+    try:
+        import uuid
+        return hashlib.sha256(str(uuid.getnode()).encode()).hexdigest()[:32]
+    except:
+        pass
     hostname = platform.node()
     username = os.getlogin() if hasattr(os, 'getlogin') else 'unknown'
     return hashlib.sha256(f"{hostname}_{username}_{time.time()}".encode()).hexdigest()[:32]
 
+# ==================== LOGIN SCREEN ====================
 async def login_screen():
+    # FIRST CHECK: Apakah device sudah diblokir?
+    if is_device_permanently_blocked():
+        block_device_and_exit()
+    
     db = GitHubDatabase()
     um = UserManager(db)
     dm = DeviceManager(db)
@@ -952,13 +911,10 @@ async def login_screen():
         print(f"{Colors.BOLD}{Colors.YELLOW}▢ LOGIN{Colors.RESET}")
         print(f"{Colors.CYAN}{'═' * 60}{Colors.RESET}\n")
         
-        # Check if device blocked
+        # Check if device blocked (dari GitHub)
         blocked, msg = await dm.is_blocked(device_id)
         if blocked:
-            print(f"{Colors.RED}⚠️ {msg}{Colors.RESET}")
-            input("\nPress Enter...")
-            await db.close()
-            return None, None, None
+            block_device_and_exit()
         
         username = input(f"{Colors.GREEN}Username: {Colors.RESET}")
         password = input(f"{Colors.GREEN}Password: {Colors.RESET}")
@@ -974,23 +930,24 @@ async def login_screen():
         else:
             attempts += 1
             blocked, msg = await dm.record_failed(device_id, username)
-            print(f"\n{Colors.RED}❌ {user_data.get('error', 'Login failed')}{Colors.RESET}")
+            print(f"\n{Colors.RED}❌ Login Failed!{Colors.RESET}")
             if blocked:
-                print(f"{Colors.RED}⚠️ {msg}{Colors.RESET}")
-                input("\nPress Enter...")
-                await db.close()
-                return None, None, None
-            print(f"{Colors.YELLOW}⚠️ {3 - attempts} attempts left{Colors.RESET}")
+                # Device will be blocked and exit
+                block_device_and_exit()
+            print(f"{Colors.YELLOW}⚠️ {3 - attempts} attempts remaining{Colors.RESET}")
             await asyncio.sleep(1)
     
-    print(f"\n{Colors.RED}🔒 Device blocked!{Colors.RESET}")
-    input("\nPress Enter...")
-    await db.close()
+    # 3 attempts failed - block device
+    block_device_and_exit()
     return None, None, None
 
 # ==================== MAIN ====================
 async def main():
     try:
+        # First check before anything
+        if is_device_permanently_blocked():
+            block_device_and_exit()
+        
         username, role, device_id = await login_screen()
         if username:
             menu = MainMenu(username, role, device_id)
