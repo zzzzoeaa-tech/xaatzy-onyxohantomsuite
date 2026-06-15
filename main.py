@@ -72,14 +72,12 @@ except ImportError:
     import requests
 
 # ==================== KONFIGURASI ====================
-# GANTI DENGAN DATA GITHUB KAMU
 GITHUB_CONFIG = {
-    "owner": "YOUR_GITHUB_USERNAME",
-    "repo": "telegram-database",
+    "owner": "zzzzoeaa-tech",
+    "repo": "onyx-databases",
     "branch": "main",
-    "token": "github_pat_YOUR_TOKEN"
+    "token": "GITHUB_PERSONAL_ACCESS_TOKEN"
 }
-
 # Telegram API
 API_ID = 25683949
 API_HASH = "5a0f1b821252088fe36c523c01c82533"
